@@ -1,8 +1,11 @@
 <launch>
 
-   <rosparam command="load" file="$(find aer_auto_exposure_gradient)/config/local.yaml" />
- <node pkg="aer_auto_exposure_gradient" type="exp_node1" name="exp_node1" output="screen">
-    </node>
-
+   <param name="/image_topic" value="/teli_camera/image_raw/compressed"/>
+   <param name="/upper_shutter" value="20000.0"/> <!-- max exposure -->
+   <param name="/lower_shutter" value="100.0"/> <!-- min exposure -->
+   <param name="/gain_max" value="30.0"/> <!-- max gain -->
+   <param name="/f_number" value="1.8"/> <!-- spec of lens -->
+   <param name="/kp" value="0.25"/>
+   <node pkg="aer_auto_exposure_gradient" type="exp_node" name="exp_node" output="screen"/>
 
 </launch>

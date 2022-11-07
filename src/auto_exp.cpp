@@ -13,77 +13,71 @@ namespace exp_node
 	cv::Mat lookUpTable_19(1, 256, CV_8U);
 	cv::Mat lookUpTable_metric(1, 256, CV_8U);
 
-	ExpNode::ExpNode (const ros::NodeHandle & nh, const ros::NodeHandle & pnh):nh_ (nh),
-    it_ (nh)
+	ExpNode::ExpNode (const ros::NodeHandle & nh, const ros::NodeHandle & pnh) : nh_(nh)
     {
-
-    	std::cout <<"the  image topic given in launch file? :"<< nh.getParam("/image_topic", image_topic)<<"\n";
+    	std::cout <<"the image topic given in launch file? :"<< nh.getParam("/image_topic", image_topic)<<"\n";
         std::cout <<"the value of image topic is : "<< image_topic<<"\n";
-        std::cout <<"the  image topic given in launch file? :"<< nh.getParam("/service_call", service_call)<<"\n";
-        std::cout <<"the value of service call val is : "<< service_call<<"\n";
-        std::cout <<"the  image topic given in launch file? :"<< nh.getParam("/exp_param_call", exp_param_call)<<"\n";
-        std::cout <<"the value of exp param is : "<< exp_param_call<<"\n";
-        std::cout <<"the  image topic given in launch file? :"<< nh.getParam("/gain_param_call", gain_param_call)<<"\n";
-        std::cout <<"the value of gain param is : "<< gain_param_call<<"\n";
-        std::cout <<"the  kp given in launch file? :"<< nh.getParam("/kp", kp)<<"\n";
+        std::cout <<"the kp given in launch file? :"<< nh.getParam("/kp", kp)<<"\n";
         std::cout <<"the value of kp is : "<< kp<<"\n";
+        std::cout <<"the upper_shutter given in launch file? :"<< nh.getParam("/upper_shutter", upper_shutter)<<"\n";
+        std::cout <<"the value of upper_shutter is : "<< upper_shutter<<"\n";
+        std::cout <<"the lower_shutter given in launch file? :"<< nh.getParam("/lower_shutter", lower_shutter)<<"\n";
+        std::cout <<"the value of lower_shutter is : "<< lower_shutter<<"\n";
+        std::cout <<"the gain_max given in launch file? :"<< nh.getParam("/gain_max", gain_max)<<"\n";
+        std::cout <<"the value of gain_max is : "<< gain_max<<"\n";
         
-        cv::namedWindow("view", CV_WINDOW_NORMAL); // comment in implement
-
     	generate_LUT();
-    	sub_camera_ = it_.subscribe(image_topic, 1,&ExpNode::CameraCb, this);
-
+    	img_sub_ = nh_.subscribe<sensor_msgs::CompressedImage>(image_topic, 1, &ExpNode::CameraCb, this);
+    	gain_sub_ = nh_.subscribe<std_msgs::Float32>("/telicam/gain", 1, &ExpNode::GainCb, this);
+		exp_sub_ = nh_.subscribe<std_msgs::Float32>("/telicam/exposure", 1, &ExpNode::ExposureCb, this);
+		gain_pub_ = nh_.advertise<std_msgs::Float32>("/telicam/set_gain", 3);
+		exp_pub_ = nh_.advertise<std_msgs::Float32>("/telicam/set_exposure", 3);
     }
 	
 
 
-	void ExpNode::CameraCb (const sensor_msgs::ImageConstPtr& msg)
-
+	void ExpNode::GainCb (const std_msgs::Float32::ConstPtr &msg)
+	{
+		gain_cur_data_ = msg->data;
+	}
+	void ExpNode::ExposureCb (const std_msgs::Float32::ConstPtr &msg)
+	{
+		exp_cur_data_ = msg->data;
+	}
+	void ExpNode::CameraCb (const sensor_msgs::CompressedImage::ConstPtr &msg)
 	{ 
-
 		if (check_rate)
 		{
 			try
 			{
+				high_resolution_clock::time_point t1 = high_resolution_clock::now();
+
 				check_rate = false;
 				cv::Mat image_current;
 				cv::Mat image_capture;
 
 				//cv::Size size(512,612); // may want to try size(408,342) if speed is limited
-				cv::Size size(342,408);
+				// cv::Size size(342,408);
 
 				// image_capture = cv_bridge::toCvCopy(msg, "mono8")->image;
 				image_capture = cv_bridge::toCvCopy(msg, "rgb8")->image;
 
-			
-				
-
-				cv::cvtColor(image_capture, image_capture, cv::COLOR_BGR2GRAY);
-				cv::resize(image_capture, image_current, size);
-				//image_capture = image_current;
+				// cv::cvtColor(image_capture, image_capture, cv::COLOR_BGR2GRAY);
+				cv::cvtColor(image_capture, image_current, cv::COLOR_BGR2GRAY);
+				// cv::resize(image_capture, image_current, size);
+				high_resolution_clock::time_point t2 = high_resolution_clock::now();
 
 				///////////////////////////////////////////////////////////////////////////////////////////////////////////
 				// Call the image processing funciton here (i.e. the gamma processing), returning a float point gamma value
 				///////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-
-
-				// calculate the upper limit of shutter speed [unit:microsecond]
-				if ((1.0/frame_rate_req)*1000000.0 > 32754.0){        
-					upper_shutter = 32754.0;
-					}
-				else{
-					upper_shutter = round(1000000.0/frame_rate_req);
-					}
 				
-
 				// loop to call image_gradient_gamma function to obtain image gradient of each gamma
 				// manually adjust the possible gamma values and the number of gamma to use
 				for (int i=0; i<7; ++i)
 				{
-				   metric[i]= image_gradient_gamma(image_current, i)/1000000; // passing the corresponding index
-				//std::cout << "\nmetric " << i << " is:" <<metric[i] <<std::endl;
-				   std::cout << "  " <<metric[i] <<std::endl; // comment
+				   metric[i]= image_gradient_gamma(image_current, i)/1000000.0; // passing the corresponding index
+				   // std::cout << "\nmetric " << i << " is:" <<metric[i] <<std::endl;
+				   // std::cout << "  " <<metric[i] <<std::endl; // comment
 				}
                                 
 				// loop to find out the index that correslated to the optimum/maximum gamma value
@@ -94,7 +88,6 @@ namespace exp_node
 						gamma_index = i;
 					} // end of if
 				} // end of for loop 
-
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////  Curve Fitting  ///////////////////////////////////////////////
@@ -108,14 +101,14 @@ namespace exp_node
 				for ( int i = 0; i < 6; i++ ) {
       					
 					coeff[i] = *(coeff_curve+i);
-					std::cout << "\ncoeff " << i << " is:" << coeff[i] << std::endl; // comment
+					// std::cout << "\ncoeff " << i << " is:" << coeff[i] << std::endl; // comment
    				}
 
 				double metric_check = 0.0;
 
 				max_gamma = findRoots1(coeff, metric[gamma_index]); // calling function findRoots1 to find opt_gamma
 				
-				std::cout << "\nopt_gamma now is:  " << max_gamma << std::endl; //comment
+				// std::cout << "\nopt_gamma now is:  " << max_gamma << std::endl; //comment
 				
 				for (int i=0; i<6; i++) 
 				{
@@ -123,7 +116,7 @@ namespace exp_node
 				}
 								
 
-				std::cout << "metric_check = " << metric_check << std::endl; // comment
+				// std::cout << "metric_check = " << metric_check << std::endl; // comment
 
 				if (max_gamma < 1.0/1.9 || max_gamma > 1.9)	
 				{
@@ -139,27 +132,20 @@ namespace exp_node
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-				
-
                                
 				// alpha value refers to Shim's 2014 paper
 				if (max_gamma < 1)
-                    //{alpha = 0.5;} //original paper used 0.5
-					{alpha = 1.0;}
+					// alpha = 0.5;
+					alpha = 1.0; //original paper used 0.5
                 if (max_gamma >= 1)
-					{alpha = 1.0;}
+					alpha = 0.5;
 				
-				//ros::param::get("/blackfly/spinnaker_camera_nodelet/exposure_time", shutter_cur); // get the current shutter
-				//ros::param::get("/blackfly/spinnaker_camera_nodelet/gain", gain_cur); // get the current gain
 
-				ros::param::get(exp_param_call, shutter_cur); // get the current shutter
-				ros::param::get(gain_param_call, gain_cur); // get the current gain
-			
+    			// get the current shutter and gain
+				shutter_cur = exp_cur_data_ / 1000000.0; // unit from micro-second to second
+    			gain_cur = gain_cur_data_;
 				
-				shutter_cur = shutter_cur / 1000000; // unit from micro-second to second
-				
-				expCur = log2(7.84/( shutter_cur* pow(2,(gain_cur/6.0)) ) ); // The 7.84 here is because the camera we are using has a F-number of 2.8			
-
+				expCur = log2( (f_number*f_number)/( shutter_cur* pow(2,(gain_cur/6.0)) ) ); // The 7.84 here is because the camera we are using has a F-number of 2.8
 				
 				// This update function was implemented in Shim's 2018 paper which is an update version of his 2014 paper
 				R = d * tan( (2 - max_gamma) * atan2(1,d) - atan2(1,d) ) + 1;
@@ -168,60 +154,66 @@ namespace exp_node
 				// Shim's 2014 version of update function
 				//expNew = (1+ kp * alpha * (1-max_gamma)) * expCur; 
 			
-				shutter_new = (7.84) * 1000000/(pow(2,expNew)); //[unit: micro-second]  Note: 7.84 = 2.8*2.8
-				
-				//std::cout << "\ngain: " << round(gain_cur) << "   shutter_new: "<< shutter_new << std::endl; //
+				shutter_new = ( f_number*f_number) * 1000000.0/(pow(2, expNew)); //[unit: micro-second]  Note: 7.84 = 2.8*2.8
+				// std::cout << "\ngain: " << round(gain_cur) << "   shutter_new: "<< shutter_new << std::endl; //
 
 
 				if (shutter_new > upper_shutter)
-                		{
-                    		gain_flag= true;
-                    		shutter_new=upper_shutter;
-                		}
+        		{
+            		gain_flag= true;
+            		shutter_new=upper_shutter;
+        		}
                 else if (shutter_new<lower_shutter)
-                		{
-                    		gain_flag= true;
-                    		shutter_new=lower_shutter;
-		                }
+        		{
+            		gain_flag= true;
+            		shutter_new=lower_shutter;
+                }
                 else {gain_flag=false;}
                 
 
 
                 if (gain_flag==true)
-                	{
-                		gain_new = 6.0*(expCur-expNew)+gain_cur;
-				
-                    	if (gain_new > 30)
-                    		{gain_new = 30;}
-                    	else if (gain_new < -10)
-                    		{gain_new = -10;}
-						gain_flag = false;                    		
-                	}
+            	{
+            		gain_new = 6.0*(expCur-expNew)+gain_cur;
+			
+                	if (gain_new > gain_max)
+                		gain_new = gain_max;
+                	else if (gain_new < -0.0)
+                		gain_new = -0.0;
+					gain_flag = false;                    		
+            	}
                 else if  (shutter_new < upper_shutter && shutter_new > lower_shutter)
-                	{
-                    	gain_new = 0.0;
-						//gain_flag = false;
-                    	//gain_cur=gain_new;
-                	}
+            	{
+                	gain_new = 0.0;
+					//gain_flag = false;
+                	//gain_cur=gain_new;
+            	}
 
 				///////////////////////////// Comment or delete the following three lines in implementation ////////////////
-				std::cout << "\ngain: " << round(gain_cur) << "   shutter_new: "<< shutter_new << std::endl;
-				std::cout << "\ncurrent opt met: " << metric[gamma_index] << "; met at 1.0: " << metric[3]<<std::endl;
+				// std::cout << "\ngain: " << round(gain_cur) << "   shutter_new: "<< shutter_new << std::endl;
+				// std::cout << "\ncurrent opt met: " << metric[gamma_index] << "; met at 1.0: " << metric[3]<<std::endl;
 
-				std::cout << "max gamma: " << max_gamma << " ; gain_new: " << gain_new << "; shutter_cur: "<< shutter_cur << " ; shutter_new:  " << shutter_new << std::endl;
+				// std::cout << "max gamma: " << max_gamma << " ; gain_new: " << gain_new << "; shutter_cur: "<< shutter_cur*1000000.0 << " ; shutter_new:  " << shutter_new << std::endl;
 
 				///////////////////////////////////////////////////////////////////
 				// Then call the function to determine what exposure time and gain to update
-                ///////////////////////////////////////////////////////////////////
+				// may input the gain and exposure time update
+				std_msgs::Float32 gain_msg_, exp_msg_;
+				gain_msg_.data = gain_new;
+				exp_msg_.data = shutter_new;
+				gain_pub_.publish(gain_msg_);
+				exp_pub_.publish(exp_msg_);    			
+				high_resolution_clock::time_point t3 = high_resolution_clock::now();
 
-				
-                ChangeParam(shutter_new, gain_new); // may input the gain and exposure time update
-
+				ROS_WARN("CV %.1fms, CAL %.1fms, max gamma %.1f, gain_pre %.1f, gain_new %.1f, exp_pre %.1f, exp_new %.1f", 
+					duration_cast<microseconds>(t2-t1).count()/1e3, duration_cast<microseconds>(t3-t2).count()/1e3,
+					max_gamma, gain_cur, gain_new, shutter_cur, shutter_new);
 			}
 			catch (cv_bridge::Exception& e)
 			{
-				ROS_ERROR("Could not convert from '%s' to 'mono8'.", msg->encoding.c_str());
+				ROS_ERROR("Could not convert img");
 			}
+
 		}
 		else // keeping the if-else statement here is because this makes easier to add delay
 		{
@@ -236,9 +228,6 @@ namespace exp_node
 
 	// Accepting the raw image and the index of gamma value as input argument
 
-
-
-
 	    cv::Mat res = src_img.clone();
 	    ///////////////////// The following computes the image gradient of the gamma-processed image /////////////////////
 	    cv::Mat grad_x, grad_y;
@@ -246,7 +235,6 @@ namespace exp_node
 
 	    cv::Mat weight_ori = cv::Mat::ones(res.rows,res.cols,CV_64FC1);
 	    
-
 		// Using the corresponding index to find out the correct lookuptable to use
 			if (j == 0){
 				cv::LUT(src_img, lookUpTable_01, res);
@@ -269,7 +257,6 @@ namespace exp_node
 			else if (j == 6){
 				cv::LUT(src_img, lookUpTable_19, res);
 			}
-
 
 	    // Define variables that will be used in the sobel gradient determination function
 	    int scale = 1;
@@ -297,84 +284,15 @@ namespace exp_node
 	    // Using the metric equation given in Shim's 2014 paper
 	    cv::LUT(dst_img, lookUpTable_metric, res);
 	    res.convertTo(res, CV_64FC1);
-
-	    
-
-	    
+    
 	    double metric= cv::sum(res)[0];
 
-
-	    //cv::imshow("image_to_show",dst_img); // comment later
 	    return metric;
-
 	} 
 
 
-    void ExpNode::ChangeParam (double shutter_new, double gain_new) // may have input of the updated gain, exposure time settings
-    {
-        dynamic_reconfigure::ReconfigureRequest srv_req;
-        dynamic_reconfigure::ReconfigureResponse srv_resp;
-        dynamic_reconfigure::BoolParameter acq_fps_bool; //enable "acquisition_frame_rate_enable"
-        dynamic_reconfigure::StrParameter gain_auto_str,exp_auto_str,wb_auto_str; // Auto gain, white balance and exposure off
-        dynamic_reconfigure::DoubleParameter acq_fps_double, exp_time_double, gain_double, exp_auto_upper_double;
-        dynamic_reconfigure::Config conf;
-
-	// set constant frame rate
-        acq_fps_bool.name = "acquisition_frame_rate_enable"; // maximum frame rate: 80 fps
-        acq_fps_bool.value = true;
-        conf.bools.push_back(acq_fps_bool);
-
-	// trun off built-in auto exposure
-        exp_auto_str.name = "exposure_auto"; // shut off auto exposure
-        exp_auto_str.value = "Off";
-        conf.strs.push_back(exp_auto_str);
-
-	// turn off auto gain
-        gain_auto_str.name = "auto_gain"; // shut off auto gain adjustment
-        gain_auto_str.value = "Off";
-        conf.strs.push_back(gain_auto_str);
-
-	/*
-        wb_auto_str.name = "auto_white_balance"; // shut off auto white balance
-        wb_auto_str.value = "Off";
-        conf.strs.push_back(wb_auto_str);
-	*/
-
-	// Set required frame rate
-        acq_fps_double.name = "acquisition_frame_rate"; // maximum frame rate: 80 fps
-        acq_fps_double.value = frame_rate_req; //change frame rate as needed
-        conf.doubles.push_back(acq_fps_double);
-
-	// Update exposure time
-        exp_time_double.name = "exposure_time"; // Maximum range: 0 to 32754 [unit: micro-seconds]
-        exp_time_double.value = shutter_new; ///////////////////////////// using function return value
-        conf.doubles.push_back(exp_time_double);
-
-	// Update gain
-        gain_double.name = "gain"; // Maximum range: -10 to 30
-        gain_double.value = gain_new; ///////////////////////////////////// using function return value
-        conf.doubles.push_back(gain_double);
-
-	// calculate and set highest possible exposure time (the camera has a limit of 32754 [unit: microsecond])
-        exp_auto_upper_double.name = "auto_exposure_time_upper_limit";
-	if ((1.0/frame_rate_req)*1000000.0 > 32754.0){        
-		exp_auto_upper_double.value = 32754.0;
-	}
-	else{
-		exp_auto_upper_double.value = 1000000.0/frame_rate_req;
-	}
-        conf.doubles.push_back(exp_auto_upper_double);
-
-        srv_req.config = conf;
-
-        //ros::service::call("/blackfly/spinnaker_camera_nodelet/set_parameters",srv_req, srv_resp);
-	ros::service::call(service_call,srv_req, srv_resp);
-    }
-	
-
-	void ExpNode::generate_LUT (){
-		
-
+	void ExpNode::generate_LUT ()
+	{
 		// Need to keep the same gamma values as in imageCallBack
 		double gamma[7]={1.0/1.9, 1.0/1.5, 1.0/1.2 ,1.0, 1.2, 1.5, 1.9}; 		
 		
@@ -418,12 +336,8 @@ namespace exp_node
 				else{
 					q[i] = 0;
 					}
-     
 				} // end of for loop with index i
-
 		}// end of for loop with index j
-
-   		
 	} // end of generate_LUT()
 	
 
@@ -472,44 +386,45 @@ namespace exp_node
 		  		if (met_temp > check) // if the root can return a metric that is greater than current metric
 		  		{
 		  			opt_gamma = roots1[i];
-		  			std::cout << "\n in function maximum metric is: " << met_temp << "\n" << std::endl;
+		  			// std::cout << "\n in function maximum metric is: " << met_temp << "\n" << std::endl;
 		  		}
 		  	}
-		  std::cout << "eig(i) is: " << std::real(eig (i)) << "   ima: " << std::imag (eig (i)) << std::endl;
+		  // std::cout << "eig(i) is: " << std::real(eig (i)) << "   ima: " << std::imag (eig (i)) << std::endl;
 		} // end of for loop with index i
 		return opt_gamma;
 	} // END of function of findRoots1()
 
 
-double * ExpNode::curveFit (double x[7], double y[7])
-{ static double coff[6];
-  int i, j, k, n, N;
+	double * ExpNode::curveFit (double x[7], double y[7])
+	{ 
+		static double coff[6];
+		int i, j, k, n, N;
 
-  n = 5;
-  
-  Eigen::MatrixXd A(7,6);
-  Eigen::MatrixXd b(7,1);
-   
-  for (i = 0; i <7; i++)
-      for (j = 5; j>=0; j--)
-	{A(i,5-j) = pow (x[i], j);}
-    
-  for (i = 0; i <7; i++)
-   {  b(i,0) = y[i]; } 
-  
-  Eigen::MatrixXd A1 = A.transpose()*A;
-  Eigen::MatrixXd b1 = A.transpose()*b; 
-  //Eigen::MatrixXd Q =A1.colPivHouseholderQr().solve(b1);
-  Eigen::MatrixXd Q =A1.inverse()*b1;
+		n = 5;
 
-  for(i=0; i<n+1; i++)
-  {  coff[i] = Q(i);
-	//std::cout << "\nx is: " << x[i] << "Q is: " << coff[i] << std::endl;
-}
+		Eigen::MatrixXd A(7,6);
+		Eigen::MatrixXd b(7,1);
 
-  return coff;
-   
-} // END of function curveFit()
+		for (i = 0; i <7; i++)
+		for (j = 5; j>=0; j--)
+		{A(i,5-j) = pow (x[i], j);}
+
+		for (i = 0; i <7; i++)
+		{  b(i,0) = y[i]; } 
+
+		Eigen::MatrixXd A1 = A.transpose()*A;
+		Eigen::MatrixXd b1 = A.transpose()*b; 
+		//Eigen::MatrixXd Q =A1.colPivHouseholderQr().solve(b1);
+		Eigen::MatrixXd Q =A1.inverse()*b1;
+
+		for(i=0; i<n+1; i++)
+		{  coff[i] = Q(i);
+		//std::cout << "\nx is: " << x[i] << "Q is: " << coff[i] << std::endl;
+		}
+
+		return coff;
+	   
+	} // END of function curveFit()
 
 
 
@@ -517,5 +432,3 @@ double * ExpNode::curveFit (double x[7], double y[7])
     
 
 } //END OF THE WHOLE NAMESPACE
-
-
